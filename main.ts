@@ -3,8 +3,10 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { buildRadar, dataScript, parseSnapshot, validateBoard } from './lib/model.ts';
-import { buildDossier } from './vendor/makefun-board.ts';
+// Imports are hoisted: a module that throws on load would exit 1 before any of this file ran.
+const load = async () => await import('./lib/model.ts');
+const { buildDossier } = await import('./vendor/makefun-board.ts');
+const { buildRadar, dataScript, parseSnapshot, validateBoard } = await load();
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 function option(name: string, fallback: string) {
@@ -71,8 +73,10 @@ writeFileSync(join(output, 'dashboard', 'data.js'), data);
 writeFileSync(join(output, 'board.json'), JSON.stringify(board, null, 2) + '\n');
 if (process.argv.includes('--preview')) writeFileSync(join(root, 'dashboard', 'data.js'), data);
 // Only text_max_bytes shapes the canonical bytes; the other caps simply refuse.
-writeFileSync(join(output, 'dossier.json'), buildDossier(output, {
-  text_max_bytes: 65536, screenshots: { max: 4, max_bytes: 524288 },
-  dashboard: { max_files: 400, max_bytes: 4194304 }
-}));
+try {
+  writeFileSync(join(output, 'dossier.json'), buildDossier(output, {
+    text_max_bytes: 65536, screenshots: { max: 4, max_bytes: 524288 },
+    dashboard: { max_files: 400, max_bytes: 4194304 }
+  }));
+} catch (e) { console.warn(`warn: dossier refused: ${(e as Error).message}`); }
 console.log(`UNISSUED${degraded ? ' (degraded)' : ''}: ${board.rows.length} rows; ${board.watchlist_size} watchlist; ${board.peers.length} comparables. Output: ${output}`);
