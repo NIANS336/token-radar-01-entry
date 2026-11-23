@@ -1,1 +1,5 @@
 .DS_Store
+input/snapshot.json
+output/
+out/
+node_modules/
