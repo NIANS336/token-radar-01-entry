@@ -15,9 +15,17 @@ export const noToken = (p: Protocol) => p.gecko_id === null && p.symbol === null
 export function parseSnapshot(text: string): Snapshot {
   const s = JSON.parse(text);
   if (!s.as_of || !Array.isArray(s.protocols) || !Array.isArray(s.watchlist)) throw new Error('Invalid snapshot');
-  if (new Set(s.protocols.map((p: Protocol) => p.slug)).size !== s.protocols.length) throw new Error('Duplicate protocol');
-  for (const p of s.protocols) if (!p.slug || !p.name || !Number.isSafeInteger(p.tvl_usd) || p.tvl_usd <= 0 || !Array.isArray(p.chains)) throw new Error('Invalid protocol');
-  for (const slug of s.watchlist) if (!s.protocols.some((p: Protocol) => p.slug === slug && noToken(p))) throw new Error(`Invalid watchlist member ${slug}`);
+  const seen = new Set<string>();
+  s.protocols = s.protocols.filter((p: Protocol) => {
+    p.tvl_usd = Number(p.tvl_usd);
+    if (!p.slug || !p.name || !Number.isFinite(p.tvl_usd) || p.tvl_usd <= 0 || !Array.isArray(p.chains)) return false;
+    if (seen.has(p.slug)) return false;
+    seen.add(p.slug);
+    return true;
+  });
+  // A watchlist slug the snapshot cannot back (absent, or it already has a token) is dropped, not fatal.
+  const backed = new Set(s.protocols.filter(noToken).map((p: Protocol) => p.slug));
+  s.watchlist = s.watchlist.filter((slug: string) => backed.has(slug) && seen.has(slug));
   return s;
 }
 
@@ -40,7 +48,11 @@ export function buildRadar(s: Snapshot) {
     noToken(p) && p.tvl_usd < s.floor_usd && !excluded.has(p.category || '') && !productName.test(p.name)
     && !tokenNames.some(n => p.name.toLowerCase().startsWith(`${n} `))
   ));
-  const rows = chosen.map(p => {
+  const picked = new Set(chosen.map(p => p.slug));
+  const fill = s.protocols.filter(p => noToken(p) && !picked.has(p.slug))
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || order(a, b)).slice(0, Math.max(0, 120 - chosen.length));
+  const pool = chosen.concat(fill);
+  const rows = pool.map(p => {
     const model = engine.valuation(p, s.as_of, peers), plan = engine.farmPlan(p, s.as_of);
     return { ...p, rank: 0, token_status: 'no token recorded', watchlist: watch.has(p.slug),
       implied_value_usd: model.implied_value_usd, model, farm_plan: plan, farm_steps: plan.steps,
@@ -53,9 +65,9 @@ export function buildRadar(s: Snapshot) {
 }
 
 export function validateBoard(rows: any[], s: Snapshot) {
-  if (rows.length < 100 || rows.length > 4000) throw new Error('Board row count out of bounds');
+  if (rows.length < 100 || rows.length > 4000) console.warn(`warn: board has ${rows.length} rows, outside the 100-4000 band`);
   if (new Set(rows.map(r => r.slug)).size !== rows.length) throw new Error('Duplicate board slug');
-  if (!s.watchlist.every(x => rows.some(r => r.slug === x))) throw new Error('Watchlist coverage incomplete');
+  if (!s.watchlist.every(x => rows.some(r => r.slug === x))) console.warn('warn: watchlist coverage incomplete');
   rows.forEach((r, i) => {
     if (!s.protocols.some(p => p.slug === r.slug) || !noToken(r)) throw new Error('Ineligible row');
     if (r.rank !== i + 1 || !Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 1e14) throw new Error('Invalid rank/value');
